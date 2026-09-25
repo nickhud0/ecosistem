@@ -1,0 +1,72 @@
+@import "tailwindcss";
+
+@layer base {
+  * {
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    -webkit-user-select: none;
+    box-sizing: border-box;
+  }
+
+  input, textarea {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+    overscroll-behavior-y: none;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeSpeed;
+  }
+
+  /* Remove o atraso de 300ms no clique em telas touch */
+  a, button, [role="button"] {
+    touch-action: manipulation;
+  }
+}
+
+/* Ocultar barra de rolagem mantendo scroll suave */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Aceleração por hardware para evitar engasgos em telas fracas de POS */
+.hardware-accelerated {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  perspective: 1000px;
+}
+
+/* Otimização para Impressão Térmica 58mm em Maquininha POS */
+@media print {
+  @page {
+    margin: 0;
+    size: 58mm auto;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+    font-family: 'Courier New', Courier, monospace !important;
+    color: #000000 !important;
+    background: #ffffff !important;
+    width: 100% !important;
+    max-width: 58mm !important;
+    padding: 2mm !important;
+    font-size: 11px !important;
+    line-height: 1.25 !important;
+  }
+}

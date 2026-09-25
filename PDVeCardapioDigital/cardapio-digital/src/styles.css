@@ -1,0 +1,37 @@
+@import "tailwindcss";
+
+@layer base {
+  * {
+    border-color: var(--border, rgba(255, 255, 255, 0.08));
+  }
+
+  html {
+    scroll-behavior: smooth;
+    touch-action: manipulation;
+  }
+
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+/* Otimização de renderização acelerada por GPU para listas longas */
+.content-visibility-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: 0 100px;
+}
+
+/* Esconde barras de rolagem mas mantém rolagem nativa fluida */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

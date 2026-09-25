@@ -1,0 +1,62 @@
+# ==========================================
+# Ecossistema Restaurante - Root .gitignore
+# ==========================================
+
+# Dependências (Node / JS)
+node_modules/
+.pnp
+.pnp.js
+
+# Builds e Distribuições
+dist/
+dist-ssr/
+build/
+.output/
+.vinxi/
+.tanstack/**
+.nitro/
+
+# Tauri (Compilação Rust / Binários)
+**/src-tauri/target/
+**/src-tauri/gen/
+
+# Variáveis de Ambiente e Segredos
+.env
+.env*.local
+.dev.vars
+!.env.example
+!**/.env.example
+
+# Bancos de Dados Locais e Temporários
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.db-journal
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Cloudflare / Wrangler
+.wrangler/
+
+# IDEs e Editores de Código
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.swo
+
+# Arquivos do Sistema Operacional
+.DS_Store
+Thumbs.db
