@@ -10,11 +10,14 @@ Integração nativa em tempo real entre o **PDV do Caixa (Offline-First)**, **Ca
 
 ```
 ecosistem/
-├── PDVeCardapioDigital/        # Sistema PDV Desktop + Cardápio Digital do Cliente
+├── PDV/                        # Sistema PDV Desktop (Frente de Caixa & Salão)
 │   ├── src/                    # Código-fonte React, TanStack, SQLite e Tailwind
 │   ├── src-tauri/              # Motor desktop Tauri (Rust) de alta performance
-│   ├── cardapio-digital/       # Web App do Cardápio Digital para clientes
 │   └── supabase_schema.sql     # Estrutura unificada do banco de dados na nuvem
+│
+├── CardapioDigital/            # Web App do Cardápio Digital para clientes
+│   ├── src/                    # Código-fonte Vite, React e Tailwind
+│   └── index.html              # Interface mobile-friendly para autoatendimento
 │
 └── MaquininhaPOS/              # App do Garçom para Terminais Smart POS Móveis
     ├── src/                    # Código-fonte Vite, React 19, Tailwind v4 e Supabase
@@ -27,13 +30,16 @@ ecosistem/
 
 ## ⚡ Módulos do Sistema
 
-### 1. `PDVeCardapioDigital` (Frente de Caixa & Salão)
+### 1. `PDV` (Frente de Caixa & Salão)
 - **Offline-First:** Funciona 100% mesmo se a internet cair, armazenando vendas e comandas em SQLite local ultra-rápido.
 - **Sincronização em Tempo Real:** Motor em background sincroniza bidirecionalmente com o Supabase assim que há conexão.
 - **Gestão Abrangente:** Controle de mesas, comandas agrupadas, delivery (iFood/WhatsApp), contas fiado com limites, fechamento de turno/caixa cego e impressão de produção.
-- **Cardápio Digital Integrado:** Módulo web para autoatendimento e pedidos de clientes via QR Code.
 
-### 2. `MaquininhaPOS` (Terminal Móvel de Garçom)
+### 2. `CardapioDigital` (Autoatendimento & Cardápio Web)
+- **Acesso por QR Code:** Visualização de pratos, categorias, adicionais e carrinho de pedidos.
+- **Leve e Rápido:** Construído em React + Vite para carregamento instantâneo no smartphone dos clientes.
+
+### 3. `MaquininhaPOS` (Terminal Móvel de Garçom)
 - **Projetado para Smart POS Android:** Otimizado para telas de 5" a 5.5" (Sunmi, PagSeguro, Stone, Clover, Cielo).
 - **Sensação Instantânea (0ms):** Mutações otimistas em memória. Ao anotar pedidos ou abrir mesas, a tela responde no mesmo milissegundo, sem esperas de rede.
 - **Despacho para Cozinha sob Demanda:** Itens são lançados na mesa como pendentes e despachados em rodadas controladas pelo garçom (`R1, R2...`).
@@ -58,28 +64,39 @@ Tanto o **PDV Desktop** quanto as **Maquininhas POS** comunicam-se de forma sinc
 - **npm** ou **pnpm**
 - **Rust** (apenas se for compilar o binário desktop do PDV com Tauri)
 
-### 1. Executando o PDV e Cardápio Digital
+### 1. Executando o PDV Desktop
 ```bash
-cd PDVeCardapioDigital
+cd PDV
 npm install
 npm run dev
 ```
 
-### 2. Executando o App da Maquininha POS
+### 2. Executando o Cardápio Digital
+```bash
+cd CardapioDigital
+npm install
+npm run dev
+```
+
+### 3. Executando o App da Maquininha POS
 ```bash
 cd MaquininhaPOS
 npm install
 npm run dev
 ```
 
-### 3. Build de Produção
+### 4. Build de Produção
 ```bash
 # Na pasta da Maquininha:
 cd MaquininhaPOS
 npm run build
 
 # Na pasta do PDV:
-cd PDVeCardapioDigital
+cd PDV
+npm run build
+
+# Na pasta do Cardápio Digital:
+cd CardapioDigital
 npm run build
 ```
 
