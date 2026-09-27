@@ -87,6 +87,7 @@ import {
   triggerSync,
 } from "@/services/syncService";
 import { isSupabaseConfigured } from "@/services/supabaseClient";
+import { localHubCoordinator } from "@/services/localHubCoordinator";
 
 export function SettingsPage() {
   const pos = usePos();
@@ -2555,6 +2556,48 @@ export function SettingsPage() {
                   </span>
                 </div>
               )}
+            </div>
+
+            {/* Local Hub de Sincronização LAN (Maquininhas POS) */}
+            <div className="rounded-2xl glass-soft p-5 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h3 className="font-display font-semibold text-sm flex items-center gap-2">
+                    <Wifi className="size-4 text-emerald-500" />
+                    Local Hub de Sincronização LAN (Tempo Real na Rede Local)
+                  </h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Permite que as maquininhas de garçom operem mesmo sem conexão com a internet.
+                  </p>
+                </div>
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                  <span className="size-2 rounded-full bg-emerald-400 animate-pulse" />
+                  Hub Local Ativo
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs pt-1">
+                <div>
+                  <span className="text-muted-foreground block mb-0.5">Endereço WebSocket:</span>
+                  <span className="font-semibold text-foreground font-mono">
+                    ws://{localHubCoordinator.getStats().localIp}:8080/sync/ws
+                  </span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block mb-0.5">Porta Local:</span>
+                  <span className="font-semibold text-foreground font-mono">8080 (TCP / LAN)</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block mb-0.5">Protocolo:</span>
+                  <span className="font-semibold text-emerald-400">Offline-First + Event Sourcing</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block mb-0.5">Eventos Processados:</span>
+                  <span className="font-semibold text-foreground font-mono">
+                    {localHubCoordinator.getStats().eventsProcessedCount} eventos
+                  </span>
+                </div>
+              </div>
             </div>
 
             {/* Zona de Perigo - Reset de Fábrica */}

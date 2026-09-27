@@ -142,3 +142,30 @@ export function printReceipt(data: ReceiptData) {
     console.warn("[printReceipt Error]:", err);
   }
 }
+
+/**
+ * Dispara um cupom de teste na impressora térmica integrada 58mm da maquininha
+ */
+export function printTestReceipt(deviceId?: string): void {
+  printReceipt({
+    title: "Teste de Impressão POS",
+    tableNumber: 99,
+    waiter: deviceId || "Operador",
+    items: [
+      {
+        id: "test-item-1",
+        name: "1x Bobina Térmica 58mm",
+        qty: 1,
+        unitPrice: 0,
+        totalPrice: 0,
+        details: ["Status: Hardware OK", "Densidade: Normal"],
+      },
+    ],
+    subtotal: 0,
+    serviceFee: 0,
+    discount: 0,
+    total: 0,
+    saleCode: `TST-${Date.now().toString().slice(-4)}`,
+  });
+}
+

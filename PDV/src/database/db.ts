@@ -260,6 +260,65 @@ async function ensureFiadoTables(client: Database): Promise<void> {
 }
 
 /**
+ * Garante a criação idempotente das tabelas de Event Sourcing, Outbox, Inbox e Cursors.
+ */
+async function ensureEventSyncTables(client: Database): Promise<void> {
+  try {
+    // 1. Tabela outbox_events
+    await client.execute(`
+      CREATE TABLE IF NOT EXISTS outbox_events (
+        event_id TEXT PRIMARY KEY NOT NULL,
+        store_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        device_sequence INTEGER NOT NULL,
+        event_type TEXT NOT NULL,
+        aggregate_type TEXT NOT NULL,
+        aggregate_id TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        client_timestamp TEXT NOT NULL,
+        target_hub_sent INTEGER NOT NULL DEFAULT 0,
+        target_cloud_sent INTEGER NOT NULL DEFAULT 0,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        created_at TEXT NOT NULL
+      );
+    `);
+    await client.execute(`
+      CREATE INDEX IF NOT EXISTS idx_outbox_hub ON outbox_events(target_hub_sent);
+    `);
+    await client.execute(`
+      CREATE INDEX IF NOT EXISTS idx_outbox_cloud ON outbox_events(target_cloud_sent);
+    `);
+
+    // 2. Tabela inbox_events
+    await client.execute(`
+      CREATE TABLE IF NOT EXISTS inbox_events (
+        event_id TEXT PRIMARY KEY NOT NULL,
+        device_id TEXT NOT NULL,
+        device_sequence INTEGER NOT NULL,
+        event_type TEXT NOT NULL,
+        processed_at TEXT NOT NULL
+      );
+    `);
+    await client.execute(`
+      CREATE INDEX IF NOT EXISTS idx_inbox_device_seq ON inbox_events(device_id, device_sequence);
+    `);
+
+    // 3. Tabela sync_cursors
+    await client.execute(`
+      CREATE TABLE IF NOT EXISTS sync_cursors (
+        peer_id TEXT PRIMARY KEY NOT NULL,
+        last_processed_sequence INTEGER NOT NULL DEFAULT 0,
+        last_processed_timestamp TEXT,
+        updated_at TEXT NOT NULL
+      );
+    `);
+  } catch (err) {
+    console.error("[Database Migration Error]: Falha ao garantir tabelas de Outbox/Inbox:", err);
+  }
+}
+
+/**
  * Garante de forma idempotente que a coluna is_synced e seu respectivo índice existam
  * em todas as tabelas, permitindo upgrade transparente de bancos SQLite pré-existentes.
  */
@@ -375,7 +434,10 @@ export async function initDatabase(): Promise<void> {
     // 4. Garante criação da tabela de fiado e colunas adicionais de cliente
     await ensureFiadoTables(client);
 
-    // 5. Sanitiza UUIDs legados (ex: IDs gerados por Math.random())
+    // 5. Garante criação das tabelas de outbox, inbox e sync_cursors
+    await ensureEventSyncTables(client);
+
+    // 6. Sanitiza UUIDs legados (ex: IDs gerados por Math.random())
     await sanitizeLegacyUuids(client);
 
     console.info(

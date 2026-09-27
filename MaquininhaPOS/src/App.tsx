@@ -7,6 +7,7 @@ import { ProductCatalogSheet } from "./components/order/ProductCatalogSheet";
 import { TableDetailModal } from "./components/order/TableDetailModal";
 import { SaloonGrid } from "./components/saloon/SaloonGrid";
 import { TableTransferModal } from "./components/saloon/TableTransferModal";
+import { PosSettingsModal } from "./components/settings/PosSettingsModal";
 import { useAuthWaiter } from "./hooks/useAuthWaiter";
 import { useProductsPOS } from "./hooks/useProductsPOS";
 import { useTableOrderActions } from "./hooks/useTableOrderActions";
@@ -43,6 +44,7 @@ export function App() {
   const [isOrdering, setIsOrdering] = useState(false);
   const [isCheckingOut, setIsCheckingOut] = useState(false);
   const [isTransferring, setIsTransferring] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   // Mantém a versão atualizada da mesa selecionada se o Realtime disparar
   const liveSelectedTable = selectedTable
@@ -66,6 +68,11 @@ export function App() {
           waitersList={waitersList}
           onLogin={loginWithPin}
           isLoading={isAuthLoading}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+        />
+        <PosSettingsModal
+          isOpen={isSettingsOpen}
+          onClose={() => setIsSettingsOpen(false)}
         />
       </>
     );
@@ -179,6 +186,7 @@ export function App() {
         isLoading={isTablesLoading}
         onRefresh={refreshTables}
         onLogout={logout}
+        onOpenSettings={() => setIsSettingsOpen(true)}
         occupiedCount={occupiedCount}
         totalTables={totalTables}
       />
@@ -243,6 +251,12 @@ export function App() {
           isSubmitting={isSubmitting}
         />
       )}
+
+      {/* Modal 5: Configurações do Terminal POS (IP do Hub, Outbox e Impressora) */}
+      <PosSettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+      />
     </div>
   );
 }

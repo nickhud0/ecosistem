@@ -324,6 +324,47 @@ export const customerTransactions = sqliteTable("customer_transactions", {
   deleted_at: text("deleted_at"),
 });
 
+/**
+ * 18. Fila de Saída Local (Outbox de Eventos e Mutações)
+ */
+export const outboxEvents = sqliteTable("outbox_events", {
+  event_id: text("event_id").primaryKey(),
+  store_id: text("store_id").notNull(),
+  device_id: text("device_id").notNull(),
+  device_sequence: integer("device_sequence").notNull(),
+  event_type: text("event_type").notNull(),
+  aggregate_type: text("aggregate_type").notNull(),
+  aggregate_id: text("aggregate_id").notNull(),
+  payload: text("payload").notNull(), // JSON string
+  client_timestamp: text("client_timestamp").notNull(),
+  target_hub_sent: integer("target_hub_sent", { mode: "boolean" }).notNull().default(false),
+  target_cloud_sent: integer("target_cloud_sent", { mode: "boolean" }).notNull().default(false),
+  retry_count: integer("retry_count").notNull().default(0),
+  last_error: text("last_error"),
+  created_at: text("created_at").notNull(),
+});
+
+/**
+ * 19. Caixa de Entrada Local (Inbox / Deduplicação de Eventos Recebidos)
+ */
+export const inboxEvents = sqliteTable("inbox_events", {
+  event_id: text("event_id").primaryKey(),
+  device_id: text("device_id").notNull(),
+  device_sequence: integer("device_sequence").notNull(),
+  event_type: text("event_type").notNull(),
+  processed_at: text("processed_at").notNull(),
+});
+
+/**
+ * 20. Cursors de Sincronização Local
+ */
+export const syncCursors = sqliteTable("sync_cursors", {
+  peer_id: text("peer_id").primaryKey(), // "hub", "cloud", ou device_id
+  last_processed_sequence: integer("last_processed_sequence").notNull().default(0),
+  last_processed_timestamp: text("last_processed_timestamp"),
+  updated_at: text("updated_at").notNull(),
+});
+
 // ============================================================================
 // RELACIONAMENTOS (Drizzle Relations)
 // ============================================================================
@@ -535,3 +576,12 @@ export type NewDbCourier = InferInsertModel<typeof couriers>;
 
 export type DbCustomerTransaction = InferSelectModel<typeof customerTransactions>;
 export type NewDbCustomerTransaction = InferInsertModel<typeof customerTransactions>;
+
+export type DbOutboxEvent = InferSelectModel<typeof outboxEvents>;
+export type NewDbOutboxEvent = InferInsertModel<typeof outboxEvents>;
+
+export type DbInboxEvent = InferSelectModel<typeof inboxEvents>;
+export type NewDbInboxEvent = InferInsertModel<typeof inboxEvents>;
+
+export type DbSyncCursor = InferSelectModel<typeof syncCursors>;
+export type NewDbSyncCursor = InferInsertModel<typeof syncCursors>;

@@ -31,6 +31,8 @@ import {
 } from "@/database/schema";
 import { brl, itemsTotal, uid } from "./pos-format";
 import { onSyncEvent, requestImmediateSync } from "@/services/syncService";
+import { createMutationEvent } from "./sync-events";
+import { dispatchOutboxEvent } from "@/services/outboxService";
 import {
   DEFAULT_IFOOD_CONFIG,
   generateSampleIfoodOrder,
@@ -1408,6 +1410,24 @@ export function PosProvider({ children }: { children: ReactNode }) {
                 updated_at: now,
                 deleted_at: null,
               });
+
+              // Emite evento TABLE_OPENED para sincronização em tempo real com maquininhas POS
+              const openEvent = createMutationEvent(
+                "TABLE_OPENED",
+                "table",
+                tableId,
+                {
+                  table_id: tableId,
+                  table_number: targetTable?.number ?? 1,
+                  order_id: orderId,
+                  waiter_id: null,
+                  waiter_name: operatorName,
+                  opened_at: now,
+                  seats: targetTable?.seats ?? 4,
+                },
+                "caixa",
+              );
+              dispatchOutboxEvent(openEvent).catch(() => {});
             }
 
             // Grava cada item da comanda no SQLite com metadados de cozinha em notes
@@ -1432,6 +1452,26 @@ export function PosProvider({ children }: { children: ReactNode }) {
                 updated_at: now,
                 deleted_at: null,
               });
+
+              // Emite evento canônico ITEM_ADDED para a Outbox
+              const itemEvent = createMutationEvent(
+                "ITEM_ADDED",
+                "item",
+                item.id,
+                {
+                  item_id: item.id,
+                  order_id: orderId,
+                  table_id: tableId,
+                  name: item.name,
+                  qty: item.qty,
+                  unit_price: item.unitPrice,
+                  total_price: item.qty * item.unitPrice,
+                  details: item.details,
+                  origin_table_number: item.originTableNumber ?? originNum,
+                },
+                "caixa",
+              );
+              dispatchOutboxEvent(itemEvent).catch(() => {});
             }
 
             // Atualiza status e garçom de TODAS as mesas do grupo no SQLite
@@ -1490,6 +1530,21 @@ export function PosProvider({ children }: { children: ReactNode }) {
                 is_synced: false,
               })
               .where(eq(orderItems.id, itemId));
+
+            // Emite evento canônico ITEM_REMOVED para sincronização LAN e Cloud
+            const removeEvent = createMutationEvent(
+              "ITEM_REMOVED",
+              "item",
+              itemId,
+              {
+                item_id: itemId,
+                order_id: "",
+                table_id: tableId,
+                cancelled_by: state.operatorName || "Caixa",
+              },
+              "caixa",
+            );
+            dispatchOutboxEvent(removeEvent).catch(() => {});
 
             if (remaining.length === 0) {
               const groupDbTables = await db
@@ -2316,6 +2371,21 @@ export function PosProvider({ children }: { children: ReactNode }) {
               .update(diningTables)
               .set({ status: "conta", updated_at: now, is_synced: false })
               .where(eq(diningTables.id, tableId));
+
+            // Emite evento canônico TABLE_STATUS_CHANGED para sincronização LAN e Cloud
+            const statusEvent = createMutationEvent(
+              "TABLE_STATUS_CHANGED",
+              "table",
+              tableId,
+              {
+                table_id: tableId,
+                status: "conta",
+                waiter: table.waiter,
+                updated_at: now,
+              },
+              "caixa",
+            );
+            dispatchOutboxEvent(statusEvent).catch(() => {});
           } catch (err) {
             console.error("[printPreConta status update error]:", err);
           }
@@ -2443,40 +2513,50 @@ export function PosProvider({ children }: { children: ReactNode }) {
         }));
 
         if (isTauri()) {
-          // 1. Grava o pedido
-          await db.insert(orders).values({
-            id: orderId,
-            code: `PED-${table.number}`,
-            type: "table",
-            table_id: tableId,
-            status: "completed",
-            subtotal: itemsTotal(data.items),
-            service_fee: data.serviceFee,
-            tip: data.tip,
-            discount: data.discount,
-            total,
-            is_synced: false,
-            created_at: now,
-            updated_at: now,
-            deleted_at: null,
-          });
+          // 1. Busca se já existe um pedido aberto vinculado a esta mesa
+          const existingOpenOrders = await db
+            .select()
+            .from(orders)
+            .where(
+              and(
+                eq(orders.table_id, tableId),
+                eq(orders.type, "table"),
+                eq(orders.status, "open"),
+                isNull(orders.deleted_at),
+              ),
+            )
+            .limit(1);
 
-          // Grava os itens vinculados ao pedido concluído
-          for (const it of data.items) {
-            const itemPrice = it.unitPrice ?? it.price ?? 0;
-            const matchedProduct = state.products.find(
-              (p) => p.name.toLowerCase() === it.name.toLowerCase() || p.id === it.id,
-            );
-            await db.insert(orderItems).values({
-              id: crypto.randomUUID(),
-              order_id: orderId,
-              product_id: matchedProduct?.id ?? null,
-              name: it.name,
-              qty: it.qty,
-              unit_price: itemPrice,
-              total_price: itemPrice * it.qty,
-              details: it.details ? JSON.stringify(it.details) : null,
-              notes: null,
+          const activeOrderId = existingOpenOrders.length > 0 ? existingOpenOrders[0].id : orderId;
+
+          if (existingOpenOrders.length > 0) {
+            // Atualiza a comanda aberta existente para concluída com os totais finais
+            await db
+              .update(orders)
+              .set({
+                status: "completed",
+                subtotal: itemsTotal(data.items),
+                service_fee: data.serviceFee,
+                tip: data.tip,
+                discount: data.discount,
+                total,
+                is_synced: false,
+                updated_at: now,
+              })
+              .where(eq(orders.id, activeOrderId));
+          } else {
+            // Se não havia comanda aberta prévia, insere a comanda concluída
+            await db.insert(orders).values({
+              id: activeOrderId,
+              code: `PED-${table.number}`,
+              type: "table",
+              table_id: tableId,
+              status: "completed",
+              subtotal: itemsTotal(data.items),
+              service_fee: data.serviceFee,
+              tip: data.tip,
+              discount: data.discount,
+              total,
               is_synced: false,
               created_at: now,
               updated_at: now,
@@ -2484,11 +2564,53 @@ export function PosProvider({ children }: { children: ReactNode }) {
             });
           }
 
+          // Garante que os itens da mesa estejam associados ao activeOrderId
+          for (const it of data.items) {
+            const itemPrice = it.unitPrice ?? it.price ?? 0;
+            const matchedProduct = state.products.find(
+              (p) => p.name.toLowerCase() === it.name.toLowerCase() || p.id === it.id,
+            );
+
+            // Verifica se o item já existe no SQLite
+            const existingItem = await db
+              .select({ id: orderItems.id })
+              .from(orderItems)
+              .where(eq(orderItems.id, it.id))
+              .limit(1);
+
+            if (existingItem.length === 0) {
+              await db.insert(orderItems).values({
+                id: it.id,
+                order_id: activeOrderId,
+                product_id: matchedProduct?.id ?? null,
+                name: it.name,
+                qty: it.qty,
+                unit_price: itemPrice,
+                total_price: itemPrice * it.qty,
+                details: it.details ? JSON.stringify(it.details) : null,
+                notes: null,
+                is_synced: false,
+                created_at: now,
+                updated_at: now,
+                deleted_at: null,
+              });
+            } else {
+              await db
+                .update(orderItems)
+                .set({
+                  order_id: activeOrderId,
+                  updated_at: now,
+                  is_synced: false,
+                })
+                .where(eq(orderItems.id, it.id));
+            }
+          }
+
           // 2. Grava a venda
           await db.insert(sales).values({
             id: saleId,
             code: saleCode,
-            order_id: orderId,
+            order_id: activeOrderId,
             shift_id: state.currentShiftId,
             origin: originLabel,
             customer_id: data.creditCustomerId ?? null,
@@ -2506,6 +2628,29 @@ export function PosProvider({ children }: { children: ReactNode }) {
             updated_at: now,
             deleted_at: null,
           });
+
+          // Emite evento canônico ORDER_CLOSED para a Outbox
+          const closeEvent = createMutationEvent(
+            "ORDER_CLOSED",
+            "order",
+            activeOrderId,
+            {
+              order_id: activeOrderId,
+              table_id: tableId,
+              sale_id: saleId,
+              sale_code: saleCode,
+              subtotal: itemsTotal(data.items),
+              service_fee: data.serviceFee,
+              tip: data.tip,
+              discount: data.discount,
+              total,
+              payments: data.payments,
+              cpf: data.cpf,
+              closed_at: now,
+            },
+            "caixa",
+          );
+          dispatchOutboxEvent(closeEvent).catch(() => {});
 
           // 3. Grava os pagamentos
           for (const pay of data.payments) {

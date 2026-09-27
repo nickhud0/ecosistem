@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getLocalTables, saveLocalTables } from "../lib/db-local";
+import { lanSyncClient } from "../lib/lan-sync-client";
 import { isSupabaseConfigured, supabase } from "../lib/supabase";
 import type { OrderItem, TableStatus, TableT } from "../lib/types";
 
@@ -9,8 +11,22 @@ export function useTablesRealtime() {
   const [lastSyncTime, setLastSyncTime] = useState<Date>(new Date());
   const [error, setError] = useState<string | null>(null);
 
+  // Carrega mesas do banco local (IndexedDB) imediatamente
+  const loadLocalTables = useCallback(async () => {
+    try {
+      const local = await getLocalTables();
+      if (local && local.length > 0) {
+        setTables(local);
+        setIsLoading(false);
+      }
+    } catch {}
+  }, []);
+
   // Carrega todas as mesas e cruza com comandas e itens abertos
   const fetchTablesAndOrders = useCallback(async () => {
+    // 1. Tenta carregar do banco local primeiro para exibição instantânea
+    await loadLocalTables();
+
     if (!isSupabaseConfigured() || !supabase) {
       setIsLoading(false);
       return;
@@ -164,6 +180,7 @@ export function useTablesRealtime() {
       });
 
       setTables(mapped);
+      saveLocalTables(mapped).catch(() => {});
       setLastSyncTime(new Date());
       setError(null);
     } catch (err) {
@@ -172,12 +189,21 @@ export function useTablesRealtime() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [loadLocalTables]);
 
   // Carga inicial
   useEffect(() => {
     fetchTablesAndOrders();
   }, [fetchTablesAndOrders]);
+
+  // Escuta eventos de mutação vindos do Local Hub na LAN (ou Cloud)
+  useEffect(() => {
+    const unsubscribe = lanSyncClient.subscribeEvents(async () => {
+      await loadLocalTables();
+      setLastSyncTime(new Date());
+    });
+    return () => unsubscribe();
+  }, [loadLocalTables]);
 
   // Debounce para recarregar com segurança quando houver múltiplos eventos seguidos
   const reloadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);

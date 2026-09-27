@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { getLocalProducts, saveLocalProducts } from "../lib/db-local";
 import { isSupabaseConfigured, supabase } from "../lib/supabase";
 import type { ModifierGroup, Product, ProductCategory } from "../lib/types";
 
@@ -10,7 +11,20 @@ export function useProductsPOS() {
   const [selectedCategory, setSelectedCategory] = useState<string>("TODOS");
   const [searchQuery, setSearchQuery] = useState<string>("");
 
+  const loadLocalCatalog = useCallback(async () => {
+    try {
+      const local = await getLocalProducts();
+      if (local && local.length > 0) {
+        setProducts(local);
+        setIsLoading(false);
+      }
+    } catch {}
+  }, []);
+
   const fetchCatalog = useCallback(async () => {
+    // 1. Tenta carregar catálogo local imediatamente
+    await loadLocalCatalog();
+
     if (!isSupabaseConfigured() || !supabase) {
       setIsLoading(false);
       return;
@@ -60,19 +74,19 @@ export function useProductsPOS() {
             ];
 
       if (prodRes.data) {
-        setProducts(
-          prodRes.data.map((p) => ({
-            id: p.id,
-            name: p.name,
-            price: p.price,
-            emoji: p.emoji || "🍽️",
-            category: p.category_name,
-            categoryId: p.category_id,
-            soldOut: Boolean(p.sold_out),
-            exclusions: ["Sem cebola", "Sem tomate", "Sem molho"],
-            addons: dbAddons,
-          }))
-        );
+        const mappedProducts = prodRes.data.map((p) => ({
+          id: p.id,
+          name: p.name,
+          price: p.price,
+          emoji: p.emoji || "🍽️",
+          category: p.category_name,
+          categoryId: p.category_id,
+          soldOut: Boolean(p.sold_out),
+          exclusions: ["Sem cebola", "Sem tomate", "Sem molho"],
+          addons: dbAddons,
+        }));
+        setProducts(mappedProducts);
+        saveLocalProducts(mappedProducts).catch(() => {});
       }
 
       if (modRes.data) {

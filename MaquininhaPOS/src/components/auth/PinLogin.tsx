@@ -6,9 +6,10 @@ interface PinLoginProps {
   waitersList: UserWaiter[];
   onLogin: (pin: string) => Promise<{ success: boolean; message?: string }>;
   isLoading: boolean;
+  onOpenSettings?: () => void;
 }
 
-export function PinLogin({ waitersList, onLogin, isLoading }: PinLoginProps) {
+export function PinLogin({ waitersList, onLogin, isLoading, onOpenSettings }: PinLoginProps) {
   const [pin, setPin] = useState<string>("");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<UserWaiter | null>(null);
@@ -57,7 +58,18 @@ export function PinLogin({ waitersList, onLogin, isLoading }: PinLoginProps) {
   };
 
   return (
-    <div className="min-h-screen bg-[#090d16] flex flex-col justify-between p-4 max-w-md mx-auto">
+    <div className="min-h-screen bg-[#090d16] flex flex-col justify-between p-4 max-w-md mx-auto relative">
+      {/* Botão de Configuração de Rede no Topo Direito */}
+      {onOpenSettings && (
+        <button
+          onClick={onOpenSettings}
+          title="Configurações de Rede e IP do Hub"
+          className="absolute top-4 right-4 w-9 h-9 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 flex items-center justify-center transition-colors"
+        >
+          <Settings className="w-4 h-4" />
+        </button>
+      )}
+
       {/* Topo: Logo & Título */}
       <div className="pt-6 text-center">
         <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-tr from-emerald-500 to-teal-400 text-slate-950 font-black shadow-xl shadow-emerald-500/20 mb-3 text-2xl">

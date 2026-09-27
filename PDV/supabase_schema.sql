@@ -330,6 +330,25 @@ CREATE INDEX IF NOT EXISTS idx_customer_transactions_order ON customer_transacti
 CREATE INDEX IF NOT EXISTS idx_customer_transactions_shift ON customer_transactions (shift_id);
 CREATE INDEX IF NOT EXISTS idx_customer_transactions_created ON customer_transactions (created_at);
 
+-- 18. Armazenamento Central de Eventos e Mutações na Nuvem (Cloud Event Store)
+CREATE TABLE IF NOT EXISTS cloud_event_store (
+    event_id TEXT PRIMARY KEY NOT NULL,
+    store_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    device_sequence INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    aggregate_type TEXT NOT NULL,
+    aggregate_id TEXT NOT NULL,
+    payload JSONB NOT NULL,
+    client_timestamp TIMESTAMPTZ NOT NULL,
+    hub_timestamp TIMESTAMPTZ,
+    ingested_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cloud_event_device_seq ON cloud_event_store (store_id, device_id, device_sequence);
+CREATE INDEX IF NOT EXISTS idx_cloud_event_store_ingested ON cloud_event_store (store_id, ingested_at);
+CREATE INDEX IF NOT EXISTS idx_cloud_event_aggregate ON cloud_event_store (aggregate_type, aggregate_id);
+
 -- ============================================================================
 -- ROW LEVEL SECURITY (RLS) POLICIES
 -- Permite leitura, inserção e atualização pelo cliente com chave anon e authenticated
@@ -347,7 +366,8 @@ BEGIN
             'users', 'couriers', 'product_categories', 'modifier_groups',
             'customers', 'dining_tables', 'app_settings', 'products',
             'product_modifiers', 'cash_shifts', 'cash_movements', 'orders',
-            'delivery_orders', 'order_items', 'sales', 'payments', 'customer_transactions'
+            'delivery_orders', 'order_items', 'sales', 'payments', 'customer_transactions',
+            'cloud_event_store'
           )
     LOOP
         EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY;', tbl);
