@@ -1,5 +1,6 @@
-import React from "react";
-import { LogOut, RefreshCw } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { CloudOff, LogOut, RefreshCw, Wifi } from "lucide-react";
+import { subscribeQueue } from "../../lib/offline-queue";
 import type { UserWaiter } from "../../lib/types";
 
 interface HeaderBarProps {
@@ -21,6 +22,15 @@ export const HeaderBar = React.memo(function HeaderBar({
   occupiedCount,
   totalTables,
 }: HeaderBarProps) {
+  const [offlinePendingCount, setOfflinePendingCount] = useState(0);
+
+  useEffect(() => {
+    const unsubscribe = subscribeQueue((count) => {
+      setOfflinePendingCount(count);
+    });
+    return () => unsubscribe();
+  }, []);
+
   return (
     <header className="sticky top-0 z-30 bg-[#0c1220] border-b border-slate-800 px-3.5 py-2.5 flex items-center justify-between hardware-accelerated">
       {/* Lado Esquerdo: Identificação e Status da Nuvem */}
@@ -31,6 +41,8 @@ export const HeaderBar = React.memo(function HeaderBar({
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
             <span className="text-xs font-bold text-slate-100 tracking-tight">Fluxo POS</span>
+
+            {/* Status Realtime */}
             <span
               className={`inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full text-[9px] font-bold ${
                 isRealtimeActive
@@ -45,6 +57,14 @@ export const HeaderBar = React.memo(function HeaderBar({
               />
               {isRealtimeActive ? "Ao Vivo" : "Off"}
             </span>
+
+            {/* Badge de Fila Offline */}
+            {offlinePendingCount > 0 && (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse">
+                <CloudOff className="w-2.5 h-2.5" />
+                <span>{offlinePendingCount} fila</span>
+              </span>
+            )}
           </div>
           <p className="text-[10px] text-slate-400 leading-tight">
             {occupiedCount}/{totalTables} ocupadas

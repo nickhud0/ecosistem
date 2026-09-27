@@ -6,6 +6,7 @@ import { HeaderBar } from "./components/layout/HeaderBar";
 import { ProductCatalogSheet } from "./components/order/ProductCatalogSheet";
 import { TableDetailModal } from "./components/order/TableDetailModal";
 import { SaloonGrid } from "./components/saloon/SaloonGrid";
+import { TableTransferModal } from "./components/saloon/TableTransferModal";
 import { useAuthWaiter } from "./hooks/useAuthWaiter";
 import { useProductsPOS } from "./hooks/useProductsPOS";
 import { useTableOrderActions } from "./hooks/useTableOrderActions";
@@ -34,12 +35,14 @@ export function App() {
     sendTableToKitchen,
     requestBill,
     finishCheckout,
+    transferTable,
   } = useTableOrderActions(waiter);
 
   // Estados de navegação e modais
   const [selectedTable, setSelectedTable] = useState<TableT | null>(null);
   const [isOrdering, setIsOrdering] = useState(false);
   const [isCheckingOut, setIsCheckingOut] = useState(false);
+  const [isTransferring, setIsTransferring] = useState(false);
 
   // Mantém a versão atualizada da mesa selecionada se o Realtime disparar
   const liveSelectedTable = selectedTable
@@ -76,7 +79,6 @@ export function App() {
   const handleOpenTable = () => {
     if (!liveSelectedTable) return;
     const targetTable = liveSelectedTable;
-    // Otimista: abre imediatamente e leva para o cardápio
     optimisticSetStatus(targetTable.id, "ocupada", waiter.name);
     setIsOrdering(true);
 
@@ -89,11 +91,9 @@ export function App() {
     if (!liveSelectedTable) return;
     const targetTable = liveSelectedTable;
 
-    // Otimista: insere itens na mesa e fecha o catálogo no mesmo instante (0ms)
     optimisticAddItems(targetTable.id, newItems);
     setIsOrdering(false);
 
-    // Grava no Supabase em segundo plano
     addItemsToTable(targetTable, newItems).then((ok) => {
       if (!ok) refreshTables();
     });
@@ -103,7 +103,6 @@ export function App() {
     if (!liveSelectedTable) return;
     const targetTable = liveSelectedTable;
 
-    // Otimista: remove o item imediatamente da mesa (0ms)
     optimisticRemoveItem(targetTable.id, itemToRemove.id);
 
     const remainingCount = targetTable.items.filter((it) => it.id !== itemToRemove.id).length;
@@ -111,7 +110,6 @@ export function App() {
       setSelectedTable(null);
     }
 
-    // Sincroniza exclusão no Supabase em segundo plano
     removeItemFromTable(targetTable, itemToRemove).then((ok) => {
       if (!ok) refreshTables();
     });
@@ -121,10 +119,8 @@ export function App() {
     if (!liveSelectedTable) return;
     const targetTable = liveSelectedTable;
 
-    // Otimista: marca como enviado à cozinha imediatamente na tela
     optimisticSendToKitchen(targetTable.id);
 
-    // Atualiza o Supabase em segundo plano
     sendTableToKitchen(targetTable).then((ok) => {
       if (!ok) refreshTables();
     });
@@ -134,7 +130,6 @@ export function App() {
     if (!liveSelectedTable) return;
     const targetTable = liveSelectedTable;
 
-    // Otimista: atualiza status da mesa
     optimisticSetStatus(targetTable.id, "conta");
 
     requestBill(targetTable).then((ok) => {
@@ -155,6 +150,16 @@ export function App() {
     return ok;
   };
 
+  const handleTransferTable = async (source: TableT, target: TableT) => {
+    const ok = await transferTable(source, target);
+    if (ok) {
+      setSelectedTable(null);
+      setIsTransferring(false);
+      refreshTables();
+    }
+    return ok;
+  };
+
   return (
     <div className="min-h-screen bg-[#090d16] text-slate-100 flex flex-col max-w-md mx-auto relative shadow-2xl overflow-x-hidden">
       <Toaster
@@ -167,7 +172,7 @@ export function App() {
         }}
       />
 
-      {/* Header com Status do Supabase Realtime e Garçom */}
+      {/* Header com Status do Supabase Realtime, Fila Offline e Garçom */}
       <HeaderBar
         waiter={waiter}
         isRealtimeActive={isRealtimeActive}
@@ -190,7 +195,7 @@ export function App() {
       </main>
 
       {/* Modal 1: Extrato e Ações da Mesa Selecionada */}
-      {liveSelectedTable && !isOrdering && !isCheckingOut && (
+      {liveSelectedTable && !isOrdering && !isCheckingOut && !isTransferring && (
         <TableDetailModal
           table={liveSelectedTable}
           activeWaiter={waiter}
@@ -201,6 +206,7 @@ export function App() {
           onSendToKitchen={handleSendToKitchen}
           onRequestBill={handleRequestBill}
           onStartCheckout={() => setIsCheckingOut(true)}
+          onTransferTable={() => setIsTransferring(true)}
           isSubmitting={isSubmitting}
         />
       )}
@@ -223,6 +229,17 @@ export function App() {
           table={liveSelectedTable}
           onFinishCheckout={handleFinishCheckout}
           onClose={() => setIsCheckingOut(false)}
+          isSubmitting={isSubmitting}
+        />
+      )}
+
+      {/* Modal 4: Transferência e Junção de Mesas */}
+      {liveSelectedTable && isTransferring && (
+        <TableTransferModal
+          sourceTable={liveSelectedTable}
+          allTables={tables}
+          onTransfer={handleTransferTable}
+          onClose={() => setIsTransferring(false)}
           isSubmitting={isSubmitting}
         />
       )}

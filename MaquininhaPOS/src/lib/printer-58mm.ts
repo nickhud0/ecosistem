@@ -1,5 +1,5 @@
 import { brl } from "./format";
-import type { OrderItem, Payment, TableT } from "./types";
+import { PAYMENT_LABELS, type OrderItem, type Payment } from "./types";
 
 export interface ReceiptData {
   title: string;
@@ -14,6 +14,7 @@ export interface ReceiptData {
   openedAt?: number | string | null;
   closedAt?: string;
   saleCode?: string;
+  cpf?: string | null;
 }
 
 const LINE_WIDTH = 32;
@@ -44,10 +45,20 @@ export function generate58mmText(data: ReceiptData): string {
   lines.push(divider("-"));
 
   // Dados da Mesa e Atendente
-  lines.push(padLine(`MESA: ${String(data.tableNumber).padStart(2, "0")}`, `GARCOM: ${data.waiter}`));
-  lines.push(padLine(`EMISSAO:`, new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })));
+  lines.push(
+    padLine(`MESA: #${String(data.tableNumber).padStart(2, "0")}`, `GARCOM: ${data.waiter}`)
+  );
+  lines.push(
+    padLine(
+      `EMISSAO:`,
+      new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
+    )
+  );
   if (data.saleCode) {
     lines.push(padLine(`CUPOM:`, data.saleCode));
+  }
+  if (data.cpf) {
+    lines.push(padLine(`CPF CLIENTE:`, data.cpf));
   }
   lines.push(divider("-"));
 
@@ -55,15 +66,15 @@ export function generate58mmText(data: ReceiptData): string {
   lines.push(padLine("ITEM / QTD", "TOTAL"));
   lines.push(divider("."));
 
-  // Itens
+  // Itens e Modificadores
   data.items.forEach((it) => {
     const itemTotal = it.totalPrice ?? it.qty * it.unitPrice;
     const nameStr = `${it.qty}x ${it.name}`;
-    lines.push(padLine(nameStr.substring(0, 21), brl(itemTotal)));
+    lines.push(padLine(nameStr.substring(0, 20), brl(itemTotal)));
 
     if (it.details && it.details.length > 0) {
       it.details.forEach((d) => {
-        lines.push(`  + ${d}`.substring(0, LINE_WIDTH));
+        lines.push(`  * ${d}`.substring(0, LINE_WIDTH));
       });
     }
   });
@@ -82,11 +93,15 @@ export function generate58mmText(data: ReceiptData): string {
   lines.push(padLine("TOTAL:", brl(data.total)));
   lines.push(divider("="));
 
-  // Pagamentos (se houver)
+  // Pagamentos (Múltiplos / Parciais)
   if (data.payments && data.payments.length > 0) {
     lines.push(centerLine("PAGAMENTOS EFETUADOS"));
-    data.payments.forEach((p) => {
-      lines.push(padLine(p.method.toUpperCase(), brl(p.amount)));
+    data.payments.forEach((p, idx) => {
+      const label = PAYMENT_LABELS[p.method] || p.method.toUpperCase();
+      lines.push(padLine(`${idx + 1}. ${label}`, brl(p.amount)));
+      if (p.changeAmount && p.changeAmount > 0) {
+        lines.push(padLine("   (TROCO):", brl(p.changeAmount)));
+      }
     });
     lines.push(divider("-"));
   }
@@ -94,7 +109,7 @@ export function generate58mmText(data: ReceiptData): string {
   // Rodapé
   lines.push(centerLine("OBRIGADO PELA PREFERENCIA!"));
   lines.push(centerLine("VOLTE SEMPRE"));
-  lines.push("\n\n\n"); // Espaço para corte do papel da bobina térmica
+  lines.push("\n\n\n"); // Espaço para guilhotina da bobina térmica
 
   return lines.join("\n");
 }
@@ -105,19 +120,25 @@ export function generate58mmText(data: ReceiptData): string {
 export function printReceipt(data: ReceiptData) {
   const receiptText = generate58mmText(data);
 
-  // Cria um elemento invisível para impressão limpa
-  const existingPrintDiv = document.getElementById("thermal-print-container");
-  if (existingPrintDiv) {
-    existingPrintDiv.remove();
+  try {
+    // Cria elemento invisível para impressão CSS
+    const existingPrintDiv = document.getElementById("thermal-print-container");
+    if (existingPrintDiv) {
+      existingPrintDiv.remove();
+    }
+
+    const printDiv = document.createElement("div");
+    printDiv.id = "thermal-print-container";
+    printDiv.className = "print-only";
+    printDiv.style.display = "none";
+    printDiv.innerHTML = `<pre style="font-family: 'Courier New', Courier, monospace; font-size: 11px; margin: 0; white-space: pre-wrap;">${receiptText}</pre>`;
+
+    document.body.appendChild(printDiv);
+
+    if (typeof window !== "undefined" && typeof window.print === "function") {
+      window.print();
+    }
+  } catch (err) {
+    console.warn("[printReceipt Error]:", err);
   }
-
-  const printDiv = document.createElement("div");
-  printDiv.id = "thermal-print-container";
-  printDiv.className = "print-only";
-  printDiv.style.display = "none";
-  printDiv.innerHTML = `<pre style="font-family: 'Courier New', Courier, monospace; font-size: 11px; margin: 0; white-space: pre-wrap;">${receiptText}</pre>`;
-
-  document.body.appendChild(printDiv);
-
-  window.print();
 }

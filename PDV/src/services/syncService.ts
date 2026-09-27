@@ -1,4 +1,4 @@
-import { eq, inArray, isNull, or } from "drizzle-orm";
+import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import type { SQLiteColumn, SQLiteTable } from "drizzle-orm/sqlite-core";
 import { db, isTauri } from "@/database/db";
 import {
@@ -324,6 +324,7 @@ async function pullTableBatch(
   tableName: string,
   table: SyncableTable,
   sinceIsoString?: string | null,
+  batchSize = 100,
 ): Promise<number> {
   const client = getSupabaseClient();
   if (!client) return 0;
@@ -331,9 +332,11 @@ async function pullTableBatch(
   try {
     let query = client.from(tableName).select("*");
     if (sinceIsoString) {
-      query = query.gt("updated_at", sinceIsoString);
+      // Subtrai 2 minutos de margem de segurança para prevenir perda por relógios dessincronizados (clock skew)
+      const safeSince = new Date(new Date(sinceIsoString).getTime() - 120_000).toISOString();
+      query = query.gt("updated_at", safeSince);
     }
-    const { data, error } = await query.limit(50);
+    const { data, error } = await query.order("updated_at", { ascending: true }).limit(batchSize);
     if (error || !data || data.length === 0) {
       return 0;
     }
@@ -389,10 +392,175 @@ export async function pullFromSupabase(): Promise<number> {
 
   let totalPulled = 0;
   for (const { name, table } of INBOUND_TABLES) {
-    const pulled = await pullTableBatch(name, table, statusState.lastSyncAt);
-    totalPulled += pulled;
+    let hasMore = true;
+    let tableCycle = 0;
+    const MAX_PULL_CYCLES_PER_TABLE = 5; // Limite de 500 registros por tabela por ciclo
+
+    while (hasMore && tableCycle < MAX_PULL_CYCLES_PER_TABLE) {
+      const pulled = await pullTableBatch(name, table, statusState.lastSyncAt, 100);
+      totalPulled += pulled;
+
+      if (pulled < 100) {
+        hasMore = false;
+      }
+      tableCycle++;
+    }
   }
   return totalPulled;
+}
+
+/**
+ * Motor de Auto-Reconciliação e Consolidação de Comandas de Mesas.
+ * Resolve concorrência quando múltiplos dispositivos (ex: Maquininha 4G e PDV Offline)
+ * lançam itens simultâneos na mesma mesa ou quando o PDV recebe itens pós-fechamento.
+ */
+export async function reconcileTableOrders(): Promise<number> {
+  if (!isTauri()) return 0;
+
+  try {
+    const now = new Date().toISOString();
+    let reconciledCount = 0;
+
+    // 1. Busca todas as comandas abertas de mesas no SQLite local
+    const openOrders = await db
+      .select()
+      .from(orders)
+      .where(and(eq(orders.type, "table"), eq(orders.status, "open"), isNull(orders.deleted_at)));
+
+    if (openOrders && openOrders.length > 0) {
+      // 2. Agrupa por table_id para detectar comandas concorrentes na mesma mesa
+      const ordersByTable = new Map<string, typeof openOrders>();
+      for (const ord of openOrders) {
+        if (!ord.table_id) continue;
+        const list = ordersByTable.get(ord.table_id) || [];
+        list.push(ord);
+        ordersByTable.set(ord.table_id, list);
+      }
+
+      // 3. Para cada mesa com mais de uma comanda aberta, executa o auto-merge de itens
+      for (const [tableId, tableOrders] of ordersByTable.entries()) {
+        if (tableOrders.length <= 1) continue;
+
+        // Ordena por data de criação: a mais antiga é a comanda mestre
+        const sorted = [...tableOrders].sort((a, b) => {
+          const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
+          const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
+          return timeA - timeB;
+        });
+
+        const masterOrder = sorted[0];
+        if (!masterOrder) continue;
+
+        const secondaryOrders = sorted.slice(1);
+        const secondaryIds = secondaryOrders.map((o) => o.id);
+
+        console.info(
+          `[Sync Worker]: Auto-merge de ${secondaryOrders.length} comanda(s) concorrente(s) na comanda principal ${masterOrder.id} para mesa ${tableId}`,
+        );
+
+        // Reparenta todos os itens ativos das comandas secundárias para a comanda principal
+        await db
+          .update(orderItems)
+          .set({
+            order_id: masterOrder.id,
+            updated_at: now,
+            is_synced: false,
+          })
+          .where(and(inArray(orderItems.order_id, secondaryIds), isNull(orderItems.deleted_at)));
+
+        // Cancela e marca as comandas secundárias como mescladas
+        await db
+          .update(orders)
+          .set({
+            status: "cancelled",
+            deleted_at: now,
+            notes: `Auto-merged into ${masterOrder.id}`,
+            updated_at: now,
+            is_synced: false,
+          })
+          .where(inArray(orders.id, secondaryIds));
+
+        // Recalcula o subtotal e total exatos da comanda mestre a partir de SUM(order_items)
+        const activeMasterItems = await db
+          .select()
+          .from(orderItems)
+          .where(and(eq(orderItems.order_id, masterOrder.id), isNull(orderItems.deleted_at)));
+
+        const realSubtotal = activeMasterItems.reduce(
+          (sum, it) => sum + (it.total_price ?? it.qty * it.unit_price),
+          0,
+        );
+
+        await db
+          .update(orders)
+          .set({
+            subtotal: realSubtotal,
+            total: realSubtotal,
+            updated_at: now,
+            is_synced: false,
+          })
+          .where(eq(orders.id, masterOrder.id));
+
+        // Assegura que o status da mesa está como 'ocupada'
+        await db
+          .update(diningTables)
+          .set({
+            status: "ocupada",
+            updated_at: now,
+            is_synced: false,
+          })
+          .where(eq(diningTables.id, tableId));
+
+        reconciledCount++;
+      }
+    }
+
+    // 4. Proteção Pós-Fechamento (Anti-Prejuízo):
+    // Checa se existem mesas marcadas como 'livre' mas que possuem itens abertos no SQLite
+    const freeTables = await db
+      .select({ id: diningTables.id, number: diningTables.number })
+      .from(diningTables)
+      .where(and(eq(diningTables.status, "livre"), isNull(diningTables.deleted_at)));
+
+    for (const freeTable of freeTables) {
+      const activeItemsForFreeTable = await db
+        .select({ id: orderItems.id })
+        .from(orderItems)
+        .innerJoin(orders, eq(orderItems.order_id, orders.id))
+        .where(
+          and(
+            eq(orders.table_id, freeTable.id),
+            eq(orders.type, "table"),
+            eq(orders.status, "open"),
+            isNull(orders.deleted_at),
+            isNull(orderItems.deleted_at),
+          ),
+        )
+        .limit(1);
+
+      if (activeItemsForFreeTable.length > 0) {
+        console.warn(
+          `[Sync Worker Anti-Prejuízo]: Mesa #${freeTable.number} estava 'livre' mas possui itens ativos de comanda aberta. Reabrindo mesa para faturamento...`,
+        );
+        await db
+          .update(diningTables)
+          .set({
+            status: "ocupada",
+            opened_at: now,
+            updated_at: now,
+            is_synced: false,
+          })
+          .where(eq(diningTables.id, freeTable.id));
+
+        reconciledCount++;
+      }
+    }
+
+    return reconciledCount;
+  } catch (err) {
+    console.error("[Sync Worker Error]: Falha na auto-reconciliação de comandas:", err);
+    return 0;
+  }
 }
 
 /**
@@ -434,6 +602,7 @@ export async function triggerSync(): Promise<{
 
   let totalSynced = 0;
   let totalPulled = 0;
+  let totalReconciled = 0;
 
   try {
     // 5. Outbound: envia registros pendentes locais para o Supabase
@@ -456,12 +625,22 @@ export async function triggerSync(): Promise<{
     // 6. Inbound: puxa cadastros e parâmetros atualizados da nuvem
     totalPulled = await pullFromSupabase();
 
+    // 7. Auto-reconciliação de pedidos e comandas de mesas (Anti-conflito multi-dispositivo)
+    totalReconciled = await reconcileTableOrders();
+    if (totalReconciled > 0) {
+      console.info(
+        `[Sync Worker]: ${totalReconciled} comanda(s) reconciliada(s) e consolidadas. Agendando push imediato...`,
+      );
+      // Se houve consolidação de comandas ou reabertura de segurança, agenda push imediato para o Supabase
+      requestImmediateSync(600);
+    }
+
     statusState.lastSyncAt = new Date().toISOString();
     statusState.totalSyncedInLastRun = totalSynced;
 
-    if (totalSynced > 0 || totalPulled > 0) {
+    if (totalSynced > 0 || totalPulled > 0 || totalReconciled > 0) {
       console.info(
-        `[Sync Worker]: Ciclo concluído. ${totalSynced} enviado(s), ${totalPulled} recebido(s) do Supabase.`,
+        `[Sync Worker]: Ciclo concluído. ${totalSynced} enviado(s), ${totalPulled} recebido(s), ${totalReconciled} reconciliado(s).`,
       );
     }
   } catch (err) {
@@ -472,10 +651,14 @@ export async function triggerSync(): Promise<{
     statusState.isSyncing = false;
   }
 
-  // Notifica componentes e stores quando houver registros puxados da nuvem
-  notifySyncEventListeners({ pushed: totalSynced, pulled: totalPulled, error: statusState.lastError });
+  // Notifica componentes e stores quando houver registros puxados ou reconciliados
+  notifySyncEventListeners({
+    pushed: totalSynced,
+    pulled: totalPulled + totalReconciled,
+    error: statusState.lastError,
+  });
 
-  return { pushed: totalSynced, pulled: totalPulled, error: statusState.lastError };
+  return { pushed: totalSynced, pulled: totalPulled + totalReconciled, error: statusState.lastError };
 }
 
 export type SyncEventListener = (event: { pushed: number; pulled: number; error: string | null }) => void;

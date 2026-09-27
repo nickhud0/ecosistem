@@ -17,7 +17,7 @@ export function useProductsPOS() {
     }
 
     try {
-      const [catRes, prodRes, modRes] = await Promise.all([
+      const [catRes, prodRes, modRes, modItemsRes] = await Promise.all([
         supabase
           .from("product_categories")
           .select("id, name, sort_order")
@@ -32,6 +32,10 @@ export function useProductsPOS() {
           .from("modifier_groups")
           .select("id, name, type, min_selectable, max_selectable")
           .is("deleted_at", null),
+        supabase
+          .from("product_modifiers")
+          .select("id, group_id, name, price, available")
+          .is("deleted_at", null),
       ]);
 
       if (catRes.data) {
@@ -44,6 +48,17 @@ export function useProductsPOS() {
         );
       }
 
+      const dbAddons =
+        modItemsRes.data && modItemsRes.data.length > 0
+          ? modItemsRes.data
+              .filter((m) => m.available !== false)
+              .map((m) => ({ id: m.id, name: m.name, price: Number(m.price || 0) }))
+          : [
+              { id: "addon-bacon", name: "Bacon crocante", price: 4 },
+              { id: "addon-queijo", name: "Queijo extra", price: 5 },
+              { id: "addon-ovo", name: "Ovo", price: 3 },
+            ];
+
       if (prodRes.data) {
         setProducts(
           prodRes.data.map((p) => ({
@@ -55,11 +70,7 @@ export function useProductsPOS() {
             categoryId: p.category_id,
             soldOut: Boolean(p.sold_out),
             exclusions: ["Sem cebola", "Sem tomate", "Sem molho"],
-            addons: [
-              { id: "addon-bacon", name: "Bacon crocante", price: 4 },
-              { id: "addon-queijo", name: "Queijo extra", price: 5 },
-              { id: "addon-ovo", name: "Ovo", price: 3 },
-            ],
+            addons: dbAddons,
           }))
         );
       }

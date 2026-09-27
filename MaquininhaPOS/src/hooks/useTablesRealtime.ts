@@ -96,14 +96,21 @@ export function useTablesRealtime() {
         }
       }
 
-      // Mapa de mesa -> itens
+      // Mapa de mesa -> itens e comandas abertas
       const tableOrdersMap = new Map<string, { orderId: string; items: OrderItem[] }>();
       (rawOrders || []).forEach((ord) => {
         if (ord.table_id) {
-          tableOrdersMap.set(ord.table_id, {
-            orderId: ord.id,
-            items: orderItemsMap[ord.id] || [],
-          });
+          const existing = tableOrdersMap.get(ord.table_id);
+          const currentItems = orderItemsMap[ord.id] || [];
+          if (existing) {
+            // Se já existe comanda para esta mesa, acumula os itens para nunca ocultar lançamentos concorrentes
+            existing.items = [...existing.items, ...currentItems];
+          } else {
+            tableOrdersMap.set(ord.table_id, {
+              orderId: ord.id,
+              items: currentItems,
+            });
+          }
         }
       });
 
@@ -121,7 +128,7 @@ export function useTablesRealtime() {
 
         const validStatuses: TableStatus[] = ["livre", "ocupada", "conta"];
         const rawStatus = (t.status || "livre").toLowerCase() as TableStatus;
-        const status = validStatuses.includes(rawStatus) ? rawStatus : "livre";
+        let status = validStatuses.includes(rawStatus) ? rawStatus : "livre";
 
         let openedAt: number | null = null;
         if (t.opened_at) {
@@ -131,6 +138,12 @@ export function useTablesRealtime() {
 
         const orderData = tableOrdersMap.get(t.id);
         const items = orderData?.items || [];
+
+        // Auto-proteção: se a mesa possui itens ativos mas o status estava 'livre', reflete 'ocupada'
+        if (items.length > 0 && status === "livre") {
+          status = "ocupada";
+          openedAt = openedAt || Date.now();
+        }
 
         return {
           id: t.id,

@@ -53,6 +53,16 @@ export type ModifierGroup = {
   modifiers?: ProductModifier[];
 };
 
+export type ProductCustomization = {
+  allowCustomization: boolean;
+  exclusions: string[];
+  addons: { id: string; name: string; price: number; available?: boolean }[];
+  isPizza?: boolean;
+  pizzaFlavors?: { name: string; price: number }[];
+  meatDoneness?: string[];
+  quickNotes?: string[];
+};
+
 export type Product = {
   id: string;
   name: string;
@@ -63,6 +73,7 @@ export type Product = {
   soldOut: boolean;
   exclusions?: string[];
   addons?: { id: string; name: string; price: number }[];
+  customization?: ProductCustomization;
 };
 
 export type UserWaiter = {
@@ -76,10 +87,14 @@ export type UserWaiter = {
 export type PaymentMethod = "pix" | "credito" | "debito" | "dinheiro" | "fiado";
 
 export type Payment = {
+  id?: string;
   method: PaymentMethod;
   amount: number;
   changeAmount?: number;
   customerId?: string;
+  cardBrand?: string;
+  authorizationCode?: string;
+  timestamp?: number;
 };
 
 export type Customer = {

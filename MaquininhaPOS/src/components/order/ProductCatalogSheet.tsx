@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
-import { ArrowLeft, Check, Minus, Plus, Search, ShoppingBag, X } from "lucide-react";
+import { ArrowLeft, Check, Minus, Plus, Search, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { brl, uid } from "../../lib/format";
 import type { OrderItem, Product, ProductCategory } from "../../lib/types";
+import { ProductCustomizationSheet } from "./ProductCustomizationSheet";
 
 interface ProductCatalogSheetProps {
   tableNumber: number;
@@ -22,9 +23,9 @@ export function ProductCatalogSheet({
 }: ProductCatalogSheetProps) {
   const [selectedCat, setSelectedCat] = useState<string>("TODOS");
   const [search, setSearch] = useState<string>("");
-  const [cart, setCart] = useState<Map<string, { product: Product; qty: number; notes?: string }>>(
-    new Map()
-  );
+  const [cartItems, setCartItems] = useState<OrderItem[]>([]);
+  const [customizingProduct, setCustomizingProduct] = useState<Product | null>(null);
+  const [showCartReview, setShowCartReview] = useState(false);
 
   // Lista de categorias incluindo TODOS
   const catTabs = useMemo(() => {
@@ -44,54 +45,91 @@ export function ProductCatalogSheet({
     });
   }, [products, selectedCat, search]);
 
-  const addToCart = (product: Product) => {
+  // Adição direta (simples)
+  const addSimpleProduct = (product: Product) => {
     if (product.soldOut) return;
-    setCart((prev) => {
-      const next = new Map(prev);
-      const existing = next.get(product.id);
-      if (existing) {
-        next.set(product.id, { ...existing, qty: existing.qty + 1 });
-      } else {
-        next.set(product.id, { product, qty: 1 });
+    setCartItems((prev) => {
+      // Procura se já existe exatamente o mesmo produto sem detalhes/customizações
+      const index = prev.findIndex(
+        (it) => it.productId === product.id && (!it.details || it.details.length === 0)
+      );
+      if (index >= 0) {
+        const updated = [...prev];
+        const item = updated[index];
+        const newQty = item.qty + 1;
+        updated[index] = {
+          ...item,
+          qty: newQty,
+          totalPrice: newQty * item.unitPrice,
+        };
+        return updated;
       }
-      return next;
+      return [
+        ...prev,
+        {
+          id: uid(),
+          productId: product.id,
+          name: product.name,
+          qty: 1,
+          unitPrice: product.price,
+          totalPrice: product.price,
+          details: [],
+          sentToKitchen: false,
+          createdAt: new Date().toISOString(),
+        },
+      ];
     });
   };
 
-  const removeFromCart = (productId: string) => {
-    setCart((prev) => {
-      const next = new Map(prev);
-      const existing = next.get(productId);
-      if (!existing) return prev;
-      if (existing.qty > 1) {
-        next.set(productId, { ...existing, qty: existing.qty - 1 });
-      } else {
-        next.delete(productId);
+  // Subtração de item simples
+  const removeSimpleProduct = (productId: string) => {
+    setCartItems((prev) => {
+      const index = prev.findIndex(
+        (it) => it.productId === productId && (!it.details || it.details.length === 0)
+      );
+      if (index === -1) return prev;
+      const item = prev[index];
+      if (item.qty > 1) {
+        const updated = [...prev];
+        const newQty = item.qty - 1;
+        updated[index] = {
+          ...item,
+          qty: newQty,
+          totalPrice: newQty * item.unitPrice,
+        };
+        return updated;
       }
-      return next;
+      return prev.filter((_, i) => i !== index);
     });
   };
 
-  const cartItemsCount = Array.from(cart.values()).reduce((sum, item) => sum + item.qty, 0);
-  const cartSubtotal = Array.from(cart.values()).reduce(
-    (sum, item) => sum + item.qty * item.product.price,
+  // Adição de item customizado
+  const handleConfirmCustomized = (item: OrderItem) => {
+    setCartItems((prev) => [...prev, item]);
+    setCustomizingProduct(null);
+  };
+
+  // Remoção de item específico por ID
+  const removeItemById = (id: string) => {
+    setCartItems((prev) => prev.filter((it) => it.id !== id));
+  };
+
+  const cartTotalItemsCount = cartItems.reduce((sum, item) => sum + item.qty, 0);
+  const cartSubtotal = cartItems.reduce(
+    (sum, item) => sum + (item.totalPrice ?? item.qty * item.unitPrice),
     0
   );
 
   const handleSend = () => {
-    if (cartItemsCount === 0) return;
-    const itemsList: OrderItem[] = Array.from(cart.values()).map(({ product, qty }) => ({
-      id: uid(),
-      productId: product.id,
-      name: product.name,
-      qty,
-      unitPrice: product.price,
-      totalPrice: qty * product.price,
-      sentToKitchen: false,
-      createdAt: new Date().toISOString(),
-    }));
+    if (cartItems.length === 0) return;
+    onConfirmOrder(cartItems);
+  };
 
-    onConfirmOrder(itemsList);
+  // Contagem de um determinado produto no carrinho (incluindo variações)
+  const getProductCountInCart = (productId: string) => {
+    return cartItems
+      .filter((it) => it.productId === productId)
+      .reduce((sum, it) => sum + it.qty, 0);
   };
 
   return (
@@ -109,7 +147,7 @@ export function ProductCatalogSheet({
             <h2 className="text-base font-bold text-white tracking-tight">
               Anotar Pedido • Mesa #{String(tableNumber).padStart(2, "0")}
             </h2>
-            <p className="text-[11px] text-slate-400">Selecione os itens do cardápio</p>
+            <p className="text-[11px] text-slate-400">Cardápio ágil com adicionais e notas</p>
           </div>
         </div>
 
@@ -161,10 +199,9 @@ export function ProductCatalogSheet({
       </div>
 
       {/* Lista Vertical de Produtos */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-2 pb-28">
+      <div className="flex-1 overflow-y-auto p-3 space-y-2 pb-32">
         {filteredProducts.map((p) => {
-          const inCart = cart.get(p.id);
-          const currentQty = inCart ? inCart.qty : 0;
+          const totalInCart = getProductCountInCart(p.id);
 
           return (
             <div
@@ -172,7 +209,7 @@ export function ProductCatalogSheet({
               className={`p-3 rounded-2xl border flex items-center justify-between transition-all ${
                 p.soldOut
                   ? "bg-slate-900/40 border-slate-800/50 opacity-50"
-                  : currentQty > 0
+                  : totalInCart > 0
                   ? "bg-emerald-950/20 border-emerald-500/40 shadow-sm"
                   : "bg-slate-900/90 border-slate-800 hover:border-slate-700"
               }`}
@@ -180,7 +217,21 @@ export function ProductCatalogSheet({
               {/* Lado Esquerdo: Emoji + Nome + Preço */}
               <div
                 className="flex items-center gap-3 flex-1 min-w-0 pr-2 cursor-pointer"
-                onClick={() => !p.soldOut && addToCart(p)}
+                onClick={() => {
+                  if (p.soldOut) return;
+                  // Se for categoria com modificadores (Lanches, Pratos, etc.) abre a gaveta
+                  const isCustomizable =
+                    p.category?.toLowerCase().includes("lanche") ||
+                    p.category?.toLowerCase().includes("prato") ||
+                    p.category?.toLowerCase().includes("pizza") ||
+                    p.name.toLowerCase().includes("burger") ||
+                    p.name.toLowerCase().includes("picanha");
+                  if (isCustomizable) {
+                    setCustomizingProduct(p);
+                  } else {
+                    addSimpleProduct(p);
+                  }
+                }}
               >
                 <div className="w-10 h-10 rounded-xl bg-slate-800 flex items-center justify-center text-xl flex-shrink-0">
                   {p.emoji || "🍽️"}
@@ -194,42 +245,60 @@ export function ProductCatalogSheet({
                       </span>
                     )}
                   </div>
-                  <p className="text-xs font-semibold text-emerald-400 mt-0.5">
-                    {brl(p.price)}
-                  </p>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <p className="text-xs font-semibold text-emerald-400">{brl(p.price)}</p>
+                    {totalInCart > 0 && (
+                      <span className="text-[10px] font-bold text-emerald-300 bg-emerald-500/15 px-1.5 py-0.2 rounded">
+                        {totalInCart} na comanda
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
 
-              {/* Lado Direito: Stepper de Quantidade */}
-              <div>
-                {p.soldOut ? (
-                  <span className="text-xs text-slate-500 font-medium">Indisponível</span>
-                ) : currentQty > 0 ? (
-                  <div className="flex items-center gap-1.5 bg-slate-800/90 border border-emerald-500/40 p-1 rounded-xl">
+              {/* Lado Direito: Ações (Adicionar rápido e Personalizar) */}
+              <div className="flex items-center gap-1.5">
+                {!p.soldOut && (
+                  <>
+                    {/* Botão de Personalização (Modificadores) */}
                     <button
-                      onClick={() => removeFromCart(p.id)}
-                      className="w-8 h-8 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 flex items-center justify-center active:scale-90 transition-transform"
+                      type="button"
+                      onClick={() => setCustomizingProduct(p)}
+                      title="Personalizar adicionais e ponto"
+                      className="w-9 h-9 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center border border-slate-700 active:scale-95 transition-all"
                     >
-                      <Minus className="w-4 h-4" />
+                      <SlidersHorizontal className="w-4 h-4 text-amber-400" />
                     </button>
-                    <span className="w-6 text-center font-extrabold text-sm text-emerald-300">
-                      {currentQty}
-                    </span>
-                    <button
-                      onClick={() => addToCart(p)}
-                      className="w-8 h-8 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 flex items-center justify-center font-bold active:scale-90 transition-transform"
-                    >
-                      <Plus className="w-4 h-4" />
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => addToCart(p)}
-                    className="h-9 px-3 rounded-xl bg-slate-800 hover:bg-emerald-500 hover:text-slate-950 border border-slate-700 font-semibold text-xs text-slate-200 flex items-center gap-1 active:scale-95 transition-all"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Adicionar</span>
-                  </button>
+
+                    {/* Stepper Rápido ou Botão Adicionar */}
+                    {totalInCart > 0 ? (
+                      <div className="flex items-center gap-1 bg-slate-800/90 border border-emerald-500/40 p-1 rounded-xl">
+                        <button
+                          onClick={() => removeSimpleProduct(p.id)}
+                          className="w-7 h-7 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 flex items-center justify-center active:scale-90 transition-transform"
+                        >
+                          <Minus className="w-3.5 h-3.5" />
+                        </button>
+                        <span className="w-5 text-center font-black text-xs text-emerald-300">
+                          {totalInCart}
+                        </span>
+                        <button
+                          onClick={() => addSimpleProduct(p)}
+                          className="w-7 h-7 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 flex items-center justify-center font-bold active:scale-90 transition-transform"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => addSimpleProduct(p)}
+                        className="h-9 px-3 rounded-xl bg-slate-800 hover:bg-emerald-500 hover:text-slate-950 border border-slate-700 font-semibold text-xs text-slate-200 flex items-center gap-1 active:scale-95 transition-all"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Adicionar</span>
+                      </button>
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -237,22 +306,112 @@ export function ProductCatalogSheet({
         })}
       </div>
 
+      {/* Modal/Sheet de Customização */}
+      {customizingProduct && (
+        <ProductCustomizationSheet
+          product={customizingProduct}
+          onConfirm={handleConfirmCustomized}
+          onClose={() => setCustomizingProduct(null)}
+        />
+      )}
+
+      {/* Drawer de Revisão de Itens do Carrinho */}
+      {showCartReview && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex flex-col justify-end animate-in fade-in-50 duration-200">
+          <div className="bg-[#0f172a] rounded-t-3xl border-t border-slate-800 max-h-[80vh] flex flex-col max-w-md mx-auto w-full shadow-2xl p-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <h3 className="font-bold text-white text-base">
+                Itens a Lançar na Mesa #{tableNumber} ({cartTotalItemsCount})
+              </h3>
+              <button
+                onClick={() => setShowCartReview(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto py-3 space-y-2.5">
+              {cartItems.map((it) => (
+                <div
+                  key={it.id}
+                  className="bg-slate-900 p-3 rounded-xl border border-slate-800 flex items-start justify-between gap-2"
+                >
+                  <div>
+                    <div className="text-xs font-bold text-white">
+                      {it.qty}x {it.name}
+                    </div>
+                    {it.details && it.details.length > 0 && (
+                      <div className="text-[11px] text-slate-400 mt-0.5 space-y-0.5">
+                        {it.details.map((d, i) => (
+                          <div key={i}>{d}</div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="text-xs font-semibold text-emerald-400 mt-1">
+                      {brl(it.totalPrice ?? it.qty * it.unitPrice)}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => removeItemById(it.id)}
+                    className="p-2 rounded-lg text-slate-500 hover:text-rose-400 active:scale-90 transition-all"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <div className="pt-3 border-t border-slate-800 flex items-center justify-between">
+              <div>
+                <span className="text-xs text-slate-400">Total a Lançar</span>
+                <div className="text-lg font-black text-emerald-400">{brl(cartSubtotal)}</div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowCartReview(false);
+                  handleSend();
+                }}
+                disabled={isSubmitting}
+                className="h-11 px-5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-lg active:scale-95"
+              >
+                <Check className="w-4 h-4" />
+                <span>Confirmar e Despachar</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Barra Flutuante de Fechamento do Pedido */}
-      {cartItemsCount > 0 && (
-        <div className="fixed bottom-0 left-0 right-0 p-3 bg-[#0c1220] border-t border-slate-800 flex items-center justify-between gap-3 shadow-2xl z-50 max-w-md mx-auto hardware-accelerated">
-          <div>
-            <div className="text-[11px] text-slate-400">
-              Total ({cartItemsCount} {cartItemsCount === 1 ? "item" : "itens"})
+      {cartTotalItemsCount > 0 && (
+        <div className="fixed bottom-0 left-0 right-0 p-3 bg-[#0c1220] border-t border-slate-800 flex items-center justify-between gap-3 shadow-2xl z-40 max-w-md mx-auto">
+          <div
+            className="cursor-pointer active:scale-95 transition-transform"
+            onClick={() => setShowCartReview(true)}
+          >
+            <div className="text-[11px] text-slate-400 flex items-center gap-1">
+              <span>Ver itens ({cartTotalItemsCount})</span>
+              <span className="underline text-emerald-400 text-[10px]">revisar</span>
             </div>
             <div className="text-lg font-black text-emerald-400">{brl(cartSubtotal)}</div>
           </div>
 
           <button
             onClick={handleSend}
-            className="flex-1 h-12 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-extrabold text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/25 active:scale-95 transition-all"
+            disabled={isSubmitting}
+            className="flex-1 h-12 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-extrabold text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/25 active:scale-95 transition-all disabled:opacity-50"
           >
             <Check className="w-5 h-5" />
-            <span>Adicionar à Mesa ({cartItemsCount} {cartItemsCount === 1 ? "item" : "itens"})</span>
+            <span>
+              {isSubmitting
+                ? "Lançando..."
+                : `Lançar na Mesa (${cartTotalItemsCount} ${
+                    cartTotalItemsCount === 1 ? "item" : "itens"
+                  })`}
+            </span>
           </button>
         </div>
       )}

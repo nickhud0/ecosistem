@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
+import { enqueueOfflineAction } from "../lib/offline-queue";
 import { isValidUuid, uid } from "../lib/format";
 import { printReceipt } from "../lib/printer-58mm";
 import { isSupabaseConfigured, supabase } from "../lib/supabase";
@@ -188,14 +189,27 @@ export function useTableOrderActions(activeWaiter: UserWaiter | null) {
 
         const tableOpenedAt = table.openedAt ? new Date(table.openedAt).toISOString() : now;
 
-        // 3. Executa gravação dos itens e atualização dos totais em paralelo (Promise.all)
-        const [insertRes, orderUpdateRes, tableUpdateRes] = await Promise.all([
-          supabase.from("order_items").insert(itemsPayload),
+        // 3. Insere itens e recalcula somatório real dos itens ativos no Supabase
+        const { error: insertErr } = await supabase.from("order_items").insert(itemsPayload);
+        if (insertErr) throw insertErr;
+
+        const { data: activeOrderItems } = await supabase
+          .from("order_items")
+          .select("total_price")
+          .eq("order_id", orderId)
+          .is("deleted_at", null);
+
+        const realSubtotal = (activeOrderItems || []).reduce(
+          (sum, it) => sum + Number(it.total_price || 0),
+          0
+        );
+
+        const [orderUpdateRes, tableUpdateRes] = await Promise.all([
           supabase
             .from("orders")
             .update({
-              subtotal: currentSubtotal + addedAmount,
-              total: currentTotal + addedAmount,
+              subtotal: realSubtotal,
+              total: realSubtotal,
               updated_at: now,
               is_synced: true,
             })
@@ -212,7 +226,6 @@ export function useTableOrderActions(activeWaiter: UserWaiter | null) {
             .eq("id", table.id),
         ]);
 
-        if (insertRes.error) throw insertRes.error;
         if (orderUpdateRes.error) throw orderUpdateRes.error;
         if (tableUpdateRes.error) throw tableUpdateRes.error;
 
@@ -477,6 +490,18 @@ export function useTableOrderActions(activeWaiter: UserWaiter | null) {
       const saleCode = `CUP-${Date.now().toString().slice(-6)}`;
 
       try {
+        // 1. Verificação otimista de concorrência: Confirma se a mesa ainda está ocupada no Supabase
+        const { data: currentTableData } = await supabase
+          .from("dining_tables")
+          .select("status")
+          .eq("id", table.id)
+          .maybeSingle();
+
+        if (currentTableData && currentTableData.status === "livre") {
+          toast.error("Atenção: Esta mesa já foi finalizada ou liberada pelo Caixa!");
+          return false;
+        }
+
         // Busca a comanda aberta da mesa
         const { data: openOrders } = await supabase
           .from("orders")
@@ -489,11 +514,23 @@ export function useTableOrderActions(activeWaiter: UserWaiter | null) {
 
         const orderId = openOrders && openOrders.length > 0 ? openOrders[0].id : null;
 
-        // 1. Grava a venda na tabela 'sales'
+        // Busca turno de caixa aberto no PDV para associar a venda
+        const { data: openShifts } = await supabase
+          .from("cash_shifts")
+          .select("id")
+          .eq("status", "open")
+          .is("deleted_at", null)
+          .order("opened_at", { ascending: false })
+          .limit(1);
+
+        const activeShiftId = openShifts && openShifts.length > 0 ? openShifts[0].id : null;
+
+        // 1. Grava a venda na tabela 'sales' com shift_id
         const { error: saleErr } = await supabase.from("sales").insert({
           id: saleId,
           code: saleCode,
           order_id: orderId,
+          shift_id: activeShiftId,
           origin: `Mesa ${String(table.number).padStart(2, "0")}`,
           cpf: summary.cpf || null,
           subtotal: Number(summary.subtotal || 0),
@@ -518,6 +555,8 @@ export function useTableOrderActions(activeWaiter: UserWaiter | null) {
             amount: Number(p.amount || 0),
             change_amount: Number(p.changeAmount || 0),
             customer_id: p.customerId && isValidUuid(p.customerId) ? p.customerId : null,
+            card_brand: p.cardBrand || null,
+            authorization_code: p.authorizationCode || null,
             is_synced: true,
             created_at: now,
             updated_at: now,
@@ -527,21 +566,20 @@ export function useTableOrderActions(activeWaiter: UserWaiter | null) {
           if (payErr) throw payErr;
         }
 
-        // 3. Fecha a comanda de pedidos marcando como 'completed' (padrão do PDV)
-        if (orderId) {
-          await supabase
-            .from("orders")
-            .update({
-              status: "completed",
-              subtotal: Number(summary.subtotal || 0),
-              service_fee: Number(summary.serviceFee || 0),
-              discount: Number(summary.discount || 0),
-              total: Number(summary.total || 0),
-              updated_at: now,
-              is_synced: true,
-            })
-            .eq("id", orderId);
-        }
+        // 3. Fecha todas as comandas de pedidos abertas desta mesa marcando como 'completed'
+        await supabase
+          .from("orders")
+          .update({
+            status: "completed",
+            subtotal: Number(summary.subtotal || 0),
+            service_fee: Number(summary.serviceFee || 0),
+            discount: Number(summary.discount || 0),
+            total: Number(summary.total || 0),
+            updated_at: now,
+            is_synced: true,
+          })
+          .eq("table_id", table.id)
+          .eq("status", "open");
 
         // 4. Libera a mesa no salão em tempo real
         const { error: tableErr } = await supabase
@@ -587,6 +625,158 @@ export function useTableOrderActions(activeWaiter: UserWaiter | null) {
     [activeWaiter]
   );
 
+  // 5. Transferir Mesa ou Juntar com Outra Mesa
+  const transferTable = useCallback(
+    async (sourceTable: TableT, targetTable: TableT): Promise<boolean> => {
+      if (!isSupabaseConfigured() || !supabase) {
+        toast.error("Nuvem Supabase não conectada.");
+        return false;
+      }
+
+      setIsSubmitting(true);
+      const now = new Date().toISOString();
+
+      try {
+        const { data: sourceOrders } = await supabase
+          .from("orders")
+          .select("id")
+          .eq("table_id", sourceTable.id)
+          .eq("status", "open")
+          .is("deleted_at", null)
+          .limit(1);
+
+        const orderId =
+          sourceOrders && sourceOrders.length > 0 ? sourceOrders[0].id : sourceTable.orderId;
+
+        if (targetTable.status === "livre") {
+          // Transferência simples para mesa livre
+          if (orderId) {
+            await supabase
+              .from("orders")
+              .update({
+                table_id: targetTable.id,
+                code: `MESA-${String(targetTable.number).padStart(2, "0")}`,
+                updated_at: now,
+                is_synced: true,
+              })
+              .eq("id", orderId);
+          }
+
+          // Libera mesa de origem
+          await supabase
+            .from("dining_tables")
+            .update({
+              status: "livre",
+              waiter: "Equipe",
+              opened_at: null,
+              discount_type: null,
+              discount_amount: null,
+              merged_with: null,
+              updated_at: now,
+              is_synced: true,
+            })
+            .eq("id", sourceTable.id);
+
+          // Ocupa mesa destino
+          await supabase
+            .from("dining_tables")
+            .update({
+              status: "ocupada",
+              waiter: sourceTable.waiter,
+              opened_at: sourceTable.openedAt
+                ? new Date(sourceTable.openedAt).toISOString()
+                : now,
+              updated_at: now,
+              is_synced: true,
+            })
+            .eq("id", targetTable.id);
+        } else {
+          // Junção com mesa já ocupada
+          const { data: targetOrders } = await supabase
+            .from("orders")
+            .select("id, total")
+            .eq("table_id", targetTable.id)
+            .eq("status", "open")
+            .is("deleted_at", null)
+            .limit(1);
+
+          const targetOrderId =
+            targetOrders && targetOrders.length > 0 ? targetOrders[0].id : targetTable.orderId;
+
+          if (orderId && targetOrderId) {
+            await supabase
+              .from("order_items")
+              .update({
+                order_id: targetOrderId,
+                updated_at: now,
+                is_synced: true,
+              })
+              .eq("order_id", orderId);
+
+            await supabase
+              .from("orders")
+              .update({
+                status: "cancelled",
+                deleted_at: now,
+                updated_at: now,
+                is_synced: true,
+              })
+              .eq("id", orderId);
+
+            const sourceTotal = sourceTable.items.reduce(
+              (s, it) => s + (it.totalPrice ?? it.qty * it.unitPrice),
+              0
+            );
+            const currentTargetTotal = Number(targetOrders?.[0]?.total || 0);
+
+            await supabase
+              .from("orders")
+              .update({
+                subtotal: currentTargetTotal + sourceTotal,
+                total: currentTargetTotal + sourceTotal,
+                updated_at: now,
+                is_synced: true,
+              })
+              .eq("id", targetOrderId);
+          }
+
+          const mergedArr = [...(targetTable.mergedWith || []), sourceTable.number];
+          await Promise.all([
+            supabase
+              .from("dining_tables")
+              .update({
+                status: "livre",
+                waiter: "Equipe",
+                opened_at: null,
+                updated_at: now,
+                is_synced: true,
+              })
+              .eq("id", sourceTable.id),
+            supabase
+              .from("dining_tables")
+              .update({
+                merged_with: JSON.stringify(mergedArr),
+                updated_at: now,
+                is_synced: true,
+              })
+              .eq("id", targetTable.id),
+          ]);
+        }
+
+        triggerHaptic([20, 40, 20]);
+        toast.success(`Mesa #${sourceTable.number} transferida com sucesso!`);
+        return true;
+      } catch (err: any) {
+        console.error("[transferTable Error]:", err);
+        toast.error(`Falha ao transferir mesa: ${err.message || String(err)}`);
+        return false;
+      } finally {
+        setIsSubmitting(false);
+      }
+    },
+    []
+  );
+
   return {
     isSubmitting,
     openTable,
@@ -595,5 +785,6 @@ export function useTableOrderActions(activeWaiter: UserWaiter | null) {
     sendTableToKitchen,
     requestBill,
     finishCheckout,
+    transferTable,
   };
 }

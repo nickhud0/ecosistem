@@ -314,7 +314,8 @@ export function PosProvider({ children }: { children: ReactNode }) {
             originTableNumber,
           };
         });
-        tableItemsMap.set(order.table_id, mappedItems);
+        const existingItems = tableItemsMap.get(order.table_id) ?? [];
+        tableItemsMap.set(order.table_id, [...existingItems, ...mappedItems]);
       }
 
       const tableMergedMap = new Map<string, number[]>();
@@ -364,6 +365,10 @@ export function PosProvider({ children }: { children: ReactNode }) {
           if (t.status !== "livre" || t.waiter !== "Equipe" || t.opened_at) {
             phantomTableIdsToReset.push(t.id);
           }
+        } else if (hasActiveItems && status === "livre") {
+          // Auto-proteção: se existem itens ativos na mesa recebidos da nuvem/maquininha, mantém ocupada
+          status = "ocupada";
+          openedAt = openedAt || Date.now();
         } else if (isMerged && hasActiveItems) {
           status = t.status === "conta" ? "conta" : "ocupada";
           if (!openedAt) {
@@ -1495,41 +1500,60 @@ export function PosProvider({ children }: { children: ReactNode }) {
                 );
               const groupIds = groupDbTables.map((g) => g.id);
 
-              for (const gId of groupIds) {
-                await db
-                  .update(diningTables)
-                  .set({
-                    status: "livre",
-                    opened_at: null,
-                    waiter: "Equipe",
-                    discount_type: null,
-                    discount_amount: null,
-                    merged_with: null,
-                    updated_at: now,
-                    is_synced: false,
-                  })
-                  .where(eq(diningTables.id, gId));
-              }
-
-              await db
-                .update(orders)
-                .set({
-                  status: "cancelled",
-                  deleted_at: now,
-                  updated_at: now,
-                  is_synced: false,
-                })
+              // Validação de segurança no SQLite: confirma se realmente não há itens ativos em nenhuma comanda do grupo
+              const dbActiveItems = await db
+                .select({ id: orderItems.id })
+                .from(orderItems)
+                .innerJoin(orders, eq(orderItems.order_id, orders.id))
                 .where(
                   and(
                     inArray(orders.table_id, groupIds),
                     eq(orders.type, "table"),
                     eq(orders.status, "open"),
+                    isNull(orders.deleted_at),
+                    isNull(orderItems.deleted_at),
                   ),
-                );
+                )
+                .limit(1);
+
+              if (dbActiveItems.length === 0) {
+                for (const gId of groupIds) {
+                  await db
+                    .update(diningTables)
+                    .set({
+                      status: "livre",
+                      opened_at: null,
+                      waiter: "Equipe",
+                      discount_type: null,
+                      discount_amount: null,
+                      merged_with: null,
+                      updated_at: now,
+                      is_synced: false,
+                    })
+                    .where(eq(diningTables.id, gId));
+                }
+
+                await db
+                  .update(orders)
+                  .set({
+                    status: "cancelled",
+                    deleted_at: now,
+                    updated_at: now,
+                    is_synced: false,
+                  })
+                  .where(
+                    and(
+                      inArray(orders.table_id, groupIds),
+                      eq(orders.type, "table"),
+                      eq(orders.status, "open"),
+                    ),
+                  );
+              }
             }
           } catch (err) {
             console.error("[removeItem Error]:", err);
           }
+          requestImmediateSync(300);
         }
       },
       transferItem: async (fromId, toId, itemId) => {
@@ -1669,6 +1693,7 @@ export function PosProvider({ children }: { children: ReactNode }) {
           } catch (err) {
             console.error("[transferItem Error]:", err);
           }
+          requestImmediateSync(300);
         }
       },
       mergeTables: async (hostId, guestId) => {
@@ -1865,6 +1890,7 @@ export function PosProvider({ children }: { children: ReactNode }) {
           } catch (err) {
             console.error("[mergeTables Error]:", err);
           }
+          requestImmediateSync(300);
         }
       },
       unmergeTable: async (tableId, mode = "restore_origins", customDistribution) => {
@@ -2046,6 +2072,7 @@ export function PosProvider({ children }: { children: ReactNode }) {
           } catch (err) {
             console.error("[unmergeTable Error]:", err);
           }
+          requestImmediateSync(300);
         }
       },
       applyDiscount: async (tableId, type, amount) => {
@@ -2146,6 +2173,7 @@ export function PosProvider({ children }: { children: ReactNode }) {
                 ),
               );
           }
+          requestImmediateSync(300);
         }
       },
       sendTableToKitchen: async (tableId: string) => {
@@ -2206,6 +2234,7 @@ export function PosProvider({ children }: { children: ReactNode }) {
           } catch (err) {
             console.error("[sendTableToKitchen Error]:", err);
           }
+          requestImmediateSync(300);
         }
 
         // Monta o ticket de produção e dispara impressão térmica

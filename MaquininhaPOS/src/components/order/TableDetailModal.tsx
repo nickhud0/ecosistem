@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
+  ArrowRightLeft,
   CheckCircle2,
   ChefHat,
   Clock,
@@ -29,6 +30,7 @@ interface TableDetailModalProps {
   onSendToKitchen: () => Promise<void> | void;
   onRequestBill: () => Promise<void> | void;
   onStartCheckout: () => void;
+  onTransferTable?: () => void;
   isSubmitting: boolean;
 }
 
@@ -42,6 +44,7 @@ export function TableDetailModal({
   onSendToKitchen,
   onRequestBill,
   onStartCheckout,
+  onTransferTable,
   isSubmitting,
 }: TableDetailModalProps) {
   const [itemToDelete, setItemToDelete] = useState<OrderItem | null>(null);
@@ -186,8 +189,12 @@ export function TableDetailModal({
                               )}
                             </div>
                             {it.details && it.details.length > 0 && (
-                              <div className="text-[11px] text-slate-400 truncate">
-                                {it.details.join(", ")}
+                              <div className="text-[11px] text-slate-400 mt-1 space-y-0.5 pl-1 border-l border-slate-700/80">
+                                {it.details.map((d, idx) => (
+                                  <div key={idx} className="leading-tight text-slate-300">
+                                    {d}
+                                  </div>
+                                ))}
                               </div>
                             )}
                           </div>
@@ -266,24 +273,36 @@ export function TableDetailModal({
               <span>Anotar Mais Itens / Pedidos</span>
             </button>
 
-            {/* Linha 2: Imprimir Pré-conta e Cobrar na Maquininha */}
-            <div className="grid grid-cols-2 gap-2">
+            {/* Linha 2: Ações de Mesa (Transferir, Pré-Conta e Cobrar) */}
+            <div className="grid grid-cols-3 gap-2">
               <button
-                onClick={handlePrintPreConta}
+                type="button"
+                onClick={onTransferTable}
                 disabled={table.items.length === 0}
-                className="h-12 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700/80 text-slate-200 font-semibold text-xs flex items-center justify-center gap-1.5 active:scale-95 transition-all disabled:opacity-40"
+                className="h-12 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700/80 text-amber-300 font-semibold text-xs flex flex-col items-center justify-center gap-0.5 active:scale-95 transition-all disabled:opacity-40"
               >
-                <Printer className="w-4 h-4 text-slate-400" />
-                <span>Imprimir Pré-Conta</span>
+                <ArrowRightLeft className="w-4 h-4 text-amber-400" />
+                <span>Transferir</span>
               </button>
 
               <button
+                type="button"
+                onClick={handlePrintPreConta}
+                disabled={table.items.length === 0}
+                className="h-12 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700/80 text-slate-200 font-semibold text-xs flex flex-col items-center justify-center gap-0.5 active:scale-95 transition-all disabled:opacity-40"
+              >
+                <Printer className="w-4 h-4 text-slate-400" />
+                <span>Pré-Conta</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={onStartCheckout}
                 disabled={table.items.length === 0}
-                className="h-12 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/25 active:scale-95 transition-all disabled:opacity-40"
+                className="h-12 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-xs flex flex-col items-center justify-center gap-0.5 shadow-lg shadow-emerald-500/25 active:scale-95 transition-all disabled:opacity-40"
               >
-                <CreditCard className="w-4 h-4" />
-                <span>Cobrar na Mesa</span>
+                <CreditCard className="w-4 h-4 text-slate-950" />
+                <span>Cobrar</span>
               </button>
             </div>
           </div>
